@@ -1,0 +1,147 @@
+{
+  "simple": [
+    {
+      "id": "Q001",
+      "question": "What medications can treat irregular heartbeat (Atrial Fibrillation)?",
+      "expected_path": [
+        "Drug",
+        "TREATS",
+        "Atrial Fibrillation"
+      ],
+      "complexity": "simple",
+      "graph_entities": [
+        "TREATS",
+        "C001"
+      ]
+    },
+    {
+      "id": "Q002",
+      "question": "What drugs treat Type 2 Diabetes?",
+      "expected_path": [
+        "Drug",
+        "TREATS",
+        "Type 2 Diabetes Mellitus"
+      ],
+      "complexity": "simple",
+      "graph_entities": [
+        "TREATS",
+        "C004"
+      ]
+    },
+    {
+      "id": "Q003",
+      "question": "What does Warfarin interact with?",
+      "expected_path": [
+        "Warfarin",
+        "INTERACTS_WITH",
+        "Drug"
+      ],
+      "complexity": "simple",
+      "graph_entities": [
+        "D001",
+        "INTERACTS_WITH"
+      ]
+    },
+    {
+      "id": "Q004",
+      "question": "Which antibiotics can treat urinary tract infections?",
+      "expected_path": [
+        "Drug",
+        "TREATS",
+        "Urinary Tract Infection"
+      ],
+      "complexity": "simple",
+      "graph_entities": [
+        "TREATS",
+        "C006"
+      ]
+    },
+    {
+      "id": "Q005",
+      "question": "What medications are used for high cholesterol?",
+      "expected_path": [
+        "Drug",
+        "TREATS",
+        "Hyperlipidemia"
+      ],
+      "complexity": "simple",
+      "graph_entities": [
+        "TREATS",
+        "C003"
+      ]
+    }
+  ],
+  "medium": [
+    {
+      "id": "Q101",
+      "question": "Can I take Warfarin with Azithromycin?",
+      "expected_path": [
+        "Warfarin",
+        "INTERACTS_WITH",
+        "Azithromycin"
+      ],
+      "complexity": "medium",
+      "graph_entities": [
+        "D001",
+        "INTERACTS_WITH",
+        "D027"
+      ],
+      "reasoning": [
+        "Find if Warfarin has INTERACTS_WITH relationship to Azithromycin",
+        "Return the interaction details"
+      ]
+    }
+  ],
+  "complex": [
+    {
+      "id": "Q203",
+      "question": "I'm on Simvastatin for cholesterol and need pneumonia treatment. Which antibiotic should I avoid?",
+      "expected_path": [
+        "Simvastatin",
+        "TREATS",
+        "Hyperlipidemia",
+        "Clarithromycin",
+        "TREATS",
+        "Community-Acquired Pneumonia",
+        "Simvastatin",
+        "INTERACTS_WITH",
+        "Clarithromycin"
+      ],
+      "complexity": "complex",
+      "graph_entities": [
+        "D017",
+        "D028",
+        "INTERACTS_WITH",
+        "C003",
+        "C005"
+      ],
+      "reasoning": [
+        "Verify Simvastatin treats cholesterol",
+        "Find antibiotics treating pneumonia",
+        "Check which ones interact with Simvastatin",
+        "Warn about Clarithromycin"
+      ],
+      "real_world": "Preventing serious muscle damage from statin-antibiotic interactions"
+    },
+    {
+      "id": "Q204",
+      "question": "Can someone taking Apixaban safely use Clarithromycin?",
+      "expected_path": [
+        "Apixaban",
+        "INTERACTS_WITH",
+        "Clarithromycin"
+      ],
+      "complexity": "complex",
+      "graph_entities": [
+        "D002",
+        "INTERACTS_WITH",
+        "D028"
+      ],
+      "reasoning": [
+        "Check for direct interaction between drugs",
+        "Return severity and description"
+      ],
+      "real_world": "Quick safety check for drug combination"
+    }
+  ]
+}
