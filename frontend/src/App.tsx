@@ -56,7 +56,7 @@ function App() {
               </button>
               
               <a
-                href="https://github.com/yourusername/medical-kg"
+                href="https://github.com/Shilpi-droid/CypherRx"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2 text-white hover:bg-white/10 rounded-lg transition-all"

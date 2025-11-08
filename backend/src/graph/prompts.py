@@ -149,10 +149,31 @@ ENTITY_NAMING_CONVENTION = """
 # ==============================================================================
 
 QUERY_STRATEGY = """
-**Query Strategy**:
-1. For "Which drugs treat X?": Start from the condition node
-2. For "What does drug X interact with?": Start from the drug node
-3. For "Which X are safe in Y?": Start from drugs treating X, filter by contraindications/interactions
+**CRITICAL: Understanding Query Intent - Use Chain of Thought Reasoning**
+
+Before generating Cypher, analyze the query using these steps:
+
+STEP 1: What is being TREATED? (The medical condition requiring treatment)
+  - Look for disease names: "diabetes", "pneumonia", "UTI", "high cholesterol"
+  - Look for drug classes and what they treat: "blood thinner" → treats AF/DVT
+  - If not explicit, infer from drug class (e.g., "antibiotic" → infection)
+
+STEP 2: What are the SAFETY CONSTRAINTS? (Patient conditions or medications to avoid)
+  - Patient conditions: "pregnancy", "chronic kidney disease", "liver disease"
+  - Current medications: "I'm on Warfarin" → check interactions
+  - Avoid indicators: "unsafe", "should avoid", "contraindicated"
+
+STEP 3: Choose the correct relationship pattern:
+  - Treatment target → Use TREATS relationship
+  - Safety constraint → Use CONTRAINDICATED_IN or NOT INTERACTS_WITH
+  - "Safe" queries → Find drugs that treat X AND NOT contraindicated in Y
+  - "Avoid" queries → Find drugs that ARE contraindicated in Y
+
+**Key Patterns**:
+1. "Which drugs treat X?" → Simple: MATCH (d:Drug)-[:TREATS]->(c:Condition {name: X})
+2. "What does drug X interact with?" → MATCH (d:Drug {name: X})-[:INTERACTS_WITH]-(other)
+3. "Safe drugs for X with constraint Y" → TREATS X AND NOT CONTRAINDICATED_IN Y
+4. "Which drugs to avoid in Y" → ARE CONTRAINDICATED_IN Y
 """
 
 
@@ -179,11 +200,29 @@ CYPHER_RULES = """
 - This ensures you find interactions regardless of how they're stored in the graph
 - Example: MATCH (d1:Drug {name: "Warfarin"})-[r:INTERACTS_WITH]-(d2:Drug {name: "Ibuprofen"})
 
+**CRITICAL: INTERACTION_CHECK QUERIES (Can I take X with Y? / Is X safe with Y?)**:
+- When the user asks "Can I take Drug1 and Drug2 together?" or "I'm on Drug1, is Drug2 safe?"
+- This is an interaction_check query
+- You MUST return BOTH drugs as starting nodes (not just one, not zero)
+- The beam search will explore the INTERACTS_WITH relationship between them
+- WRONG: Return only one drug, or use a directed INTERACTS_WITH query
+- RIGHT: MATCH (d:Drug) WHERE d.name IN ["Drug1", "Drug2"] RETURN d.name AS name, "Drug" AS type
+- Example: "I'm on Rivaroxaban and starting Erythromycin. Is this safe?"
+  → Return BOTH Rivaroxaban and Erythromycin as starting nodes
+
 **CRITICAL SAFETY DEFINITION**:
 - In this knowledge graph, "safe" means: **NO `INTERACTS_WITH` relationship**
 - If two drugs have NO `INTERACTS_WITH` edge → they are **safe together**
 - If there IS an `INTERACTS_WITH` edge → **not safe**
 - Use bidirectional check: NOT (d)-[:INTERACTS_WITH]-(:Drug {name: "Warfarin"})
+
+
+**CRITICAL: ANTIBIOTIC CLASS FILTERING**:
+- "antibiotics" is NOT a drug class in the database!
+- Database has specific antibiotic classes: Penicillin, Cephalosporin, Macrolide, Fluoroquinolone, Tetracycline, Nitrofuran, Antifolate, Sulfonamide, Glycopeptide, Nitroimidazole
+- WRONG: WHERE toLower(d.class) CONTAINS "antibiotic"
+- RIGHT: WHERE toLower(d.class) IN ["penicillin", "cephalosporin", "macrolide", "fluoroquinolone", "tetracycline", "nitrofuran", "antifolate", "sulfonamide", "glycopeptide", "nitroimidazole"]
+- OR use partial match on actual classes: WHERE toLower(d.class) CONTAINS "penicillin" OR toLower(d.class) CONTAINS "cephalosporin" ...
 """
 
 
@@ -192,50 +231,271 @@ CYPHER_RULES = """
 # ==============================================================================
 FEW_SHOT_EXAMPLES = """
 **CRITICAL: RELATIONSHIP DIRECTION**
-- TREATS goes FROM Drug TO Condition
-- ALWAYS use: (d:Drug)-[:TREATS]->(c:Condition)
-- NEVER use: (c)<-[:TREATS]-(d)
-- TREATED_BY does NOT exist
+- TREATS goes FROM Drug TO Condition: (d:Drug)-[:TREATS]->(c:Condition)
+- CONTRAINDICATED_IN goes FROM Drug TO Condition: (d:Drug)-[:CONTRAINDICATED_IN]->(c:Condition)
+- INTERACTS_WITH is BIDIRECTIONAL: (d1:Drug)-[:INTERACTS_WITH]-(d2:Drug)
+- NEVER use reverse patterns like (c)<-[:TREATS]-(d)
 
-**Examples**:
+================================================================================
+EXAMPLES WITH CHAIN OF THOUGHT REASONING:
+================================================================================
 
-User: "Which drugs treat Hypertension and are safe in Pregnancy?"
-→ MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Hypertension"})
-   WHERE NOT (d)-[:CONTRAINDICATED_IN]->(:Condition {name: "Pregnancy"})
-   RETURN d.name AS name, "Drug" AS type
+Example 1: Simple treatment query
+─────────────────────────────────
+User: "What drugs treat Type 2 Diabetes?"
 
+REASONING:
+- Treatment target: Type 2 Diabetes Mellitus (explicit)
+- Safety constraints: None
+- Strategy: Simple TREATS query
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Type 2 Diabetes Mellitus"})
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 2: Interaction check (one drug to all interactions)
+─────────────────────────────────
 User: "What does Warfarin interact with?"
-→ MATCH (d:Drug {name: "Warfarin"})-[:INTERACTS_WITH]-(other)
-   RETURN other.name AS name, labels(other)[0] AS type
 
+REASONING:
+- Starting entity: Warfarin (explicit drug)
+- Goal: Find all interactions
+- Strategy: Bidirectional INTERACTS_WITH from Warfarin
+
+CYPHER:
+MATCH (d:Drug {name: "Warfarin"})-[:INTERACTS_WITH]-(other)
+RETURN other.name AS name, labels(other)[0] AS type
+
+─────────────────────────────────
+Example 2b: Interaction check (two specific drugs)
+─────────────────────────────────
+User: "Can I take Rivaroxaban and Erythromycin together?"
+User: "I'm on Rivaroxaban and starting Erythromycin. Is this safe?"
+
+REASONING:
+- Starting entities: Rivaroxaban, Erythromycin (both explicit drugs)
+- Goal: Check if these two drugs interact
+- Strategy: Bidirectional INTERACTS_WITH between the two drugs
+- CRITICAL: Use BOTH drug names in the Cypher query to check interaction
+
+CYPHER:
+MATCH (d1:Drug)-[:INTERACTS_WITH]-(d2:Drug)
+WHERE d1.name IN ["Rivaroxaban", "Erythromycin"]
+  AND d2.name IN ["Rivaroxaban", "Erythromycin"]
+  AND d1.name <> d2.name
+RETURN d1.name AS name, "Drug" AS type
+
+ALTERNATIVE (more explicit):
+MATCH (d:Drug)
+WHERE d.name IN ["Rivaroxaban", "Erythromycin"]
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 3: Class-based interaction
+─────────────────────────────────
 User: "Does Simvastatin interact with any antibiotics?"
-→ MATCH (d:Drug {name: "Simvastatin"})-[:INTERACTS_WITH]-(a:Drug)
-   WHERE toLower(a.class) CONTAINS "antibiotic"
-   RETURN a.name AS name, "Drug" AS type
 
-User: "Alternative Antibiotic for Streptococcal infection that don't interact with Contraceptive?"
-→ MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Streptococcal infection"})
-   WHERE toLower(d.class) CONTAINS "antibiotic"
-     AND NOT (d)-[:INTERACTS_WITH]-(:Drug {name: "Contraceptive"})
-   RETURN d.name AS name, "Drug" AS type
+REASONING:
+- Starting drug: Simvastatin
+- Target class: antibiotics
+- Strategy: Find drugs Simvastatin interacts with, filter by class
 
-User: "What drugs treat Diabetes?"
-→ MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Type 2 Diabetes Mellitus"})
-   RETURN d.name AS name, "Drug" AS type
+CYPHER:
+MATCH (d:Drug {name: "Simvastatin"})-[:INTERACTS_WITH]-(a:Drug)
+WHERE toLower(a.class) CONTAINS "antibiotic"
+RETURN a.name AS name, "Drug" AS type
 
-User: "What drugs treat UTI?"
-→ MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Urinary Tract Infection"})
-   RETURN d.name AS name, "Drug" AS type
+─────────────────────────────────
+Example 4: Safe drug with single constraint (patient condition)
+─────────────────────────────────
+User: "Which drugs treat Hypertension and are safe in Pregnancy?"
 
+REASONING:
+- Treatment target: Hypertension (explicit)
+- Safety constraint: Pregnancy (patient condition)
+- Strategy: TREATS Hypertension AND NOT CONTRAINDICATED_IN Pregnancy
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Hypertension"})
+WHERE NOT (d)-[:CONTRAINDICATED_IN]->(:Condition {name: "Pregnancy"})
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 5: Safe drug with drug interaction constraint
+─────────────────────────────────
 User: "Safe antibiotic for UTI with Warfarin?"
-→ MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Urinary Tract Infection"})
-   WHERE (toLower(d.class) IN ["penicillin", "cephalosporin", "macrolide", "fluoroquinolone", "tetracycline", "nitrofuran", "antifolate", "sulfonamide", "glycopeptide", "nitroimidazole"])
-     AND NOT (d)-[:INTERACTS_WITH]-(:Drug {name: "Warfarin"})
-   RETURN d.name AS name, "Drug" AS type
 
-User: "What condition connects Metformin and Insulin Glargine?"
-→ MATCH (d1:Drug {name: "Metformin"})-[:TREATS]->(c:Condition)<-[:TREATS]-(d2:Drug {name: "Insulin Glargine"})
-   RETURN c.name AS name, labels(c)[0] AS type
+REASONING:
+- Treatment target: Urinary Tract Infection (explicit)
+- Drug class: antibiotic
+- Safety constraint: Current medication Warfarin (check interactions)
+- Strategy: TREATS UTI AND is antibiotic AND NOT INTERACTS_WITH Warfarin
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Urinary Tract Infection"})
+WHERE toLower(d.class) CONTAINS "antibiotic"
+  AND NOT (d)-[:INTERACTS_WITH]-(:Drug {name: "Warfarin"})
+RETURN d.name AS name, "Drug" AS type
+
+
+
+─────────────────────────────────
+Example 7: "Avoid" query - find contraindicated drugs
+─────────────────────────────────
+User: "Which statins are unsafe during pregnancy?"
+
+REASONING:
+- Drug class: statins
+- Query intent: "unsafe" = find CONTRAINDICATED drugs
+- Safety constraint: Pregnancy
+- Strategy: Find statins that ARE CONTRAINDICATED_IN Pregnancy
+
+CYPHER:
+MATCH (d:Drug)-[:CONTRAINDICATED_IN]->(c:Condition {name: "Pregnancy"})
+WHERE toLower(d.class) CONTAINS "statin"
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 8: Avoid query with implied treatment
+─────────────────────────────────
+User: "I have atrial fibrillation and chronic kidney disease. Which blood thinner should I avoid?"
+
+REASONING:
+- Treatment target: Atrial Fibrillation (what blood thinners treat)
+- Safety constraint: Chronic Kidney Disease (patient condition)
+- Query intent: "avoid" = find contraindicated drugs
+- Strategy: Find anticoagulants that ARE CONTRAINDICATED_IN CKD
+
+CYPHER:
+MATCH (d:Drug)-[:CONTRAINDICATED_IN]->(c:Condition {name: "Chronic Kidney Disease"})
+WHERE (toLower(d.class) CONTAINS "doac" OR 
+       toLower(d.class) CONTAINS "vitamin k antagonist" OR 
+       toLower(d.class) CONTAINS "lmwh")
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 9: Multi-constraint query
+─────────────────────────────────
+User: "I'm on Warfarin and need an antibiotic for a UTI. Which one is safe?"
+
+REASONING:
+- Treatment target: Urinary Tract Infection (explicit)
+- Drug class: antibiotic
+- Safety constraint 1: Current medication Warfarin (check interactions)
+- Strategy: TREATS UTI AND is antibiotic AND NOT INTERACTS_WITH Warfarin
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Urinary Tract Infection"})
+WHERE toLower(d.class) CONTAINS "antibiotic"
+  AND NOT (d)-[:INTERACTS_WITH]-(:Drug {name: "Warfarin"})
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 10: Current medication context
+─────────────────────────────────
+User: "I'm on Apixaban and have chronic kidney disease. Which blood thinner is safest?"
+
+REASONING:
+- Current medication: Apixaban (context, but patient asking for alternative)
+- Drug class: blood thinner (anticoagulant)
+- Treatment target: AF or DVT (what blood thinners treat - implied)
+- Safety constraint: Chronic Kidney Disease (patient condition)
+- Strategy: Find anticoagulants treating AF/DVT that are NOT CONTRAINDICATED_IN CKD
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(indication:Condition)
+WHERE indication.name IN ["Atrial Fibrillation", "Deep Vein Thrombosis"]
+  AND (toLower(d.class) CONTAINS "doac" OR 
+       toLower(d.class) CONTAINS "vitamin k antagonist" OR 
+       toLower(d.class) CONTAINS "lmwh")
+  AND NOT (d)-[:CONTRAINDICATED_IN]->(:Condition {name: "Chronic Kidney Disease"})
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 11: Specific drug class for condition
+─────────────────────────────────
+User: "Which antibiotics can treat pneumonia?"
+
+REASONING:
+- Treatment target: Community-Acquired Pneumonia (explicit)
+- Drug class: antibiotics
+- Strategy: TREATS pneumonia AND is antibiotic class
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Community-Acquired Pneumonia"})
+WHERE toLower(d.class) CONTAINS "antibiotic"
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 12: Multiple medications interaction check
+─────────────────────────────────
+User: "I take Metformin and Simvastatin. Can I take Amoxicillin?"
+
+REASONING:
+- Starting entities: All three drugs mentioned
+- Goal: Check if Amoxicillin interacts with Metformin or Simvastatin
+- Strategy: Start from all three drugs for beam search to explore interactions
+
+CYPHER:
+MATCH (d:Drug)
+WHERE d.name IN ["Metformin", "Simvastatin", "Amoxicillin"]
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 13: Drug-drug interaction check (Can I take X and Y together?)
+─────────────────────────────────
+User: "Can I take Simvastatin and Clarithromycin together?"
+User: "I'm on Rivaroxaban and starting Erythromycin. Is this safe?"
+
+REASONING:
+- Starting entities: Both drugs mentioned (Simvastatin & Clarithromycin, or Rivaroxaban & Erythromycin)
+- Goal: Check if they can be taken together (interaction check)
+- Strategy: Return BOTH drugs as starting nodes so beam search can explore INTERACTS_WITH relationship
+- CRITICAL: For interaction_check queries, we need BOTH drugs as starting nodes
+
+CYPHER:
+MATCH (d:Drug)
+WHERE d.name IN ["Simvastatin", "Clarithromycin"]
+RETURN d.name AS name, "Drug" AS type
+
+For Rivaroxaban + Erythromycin:
+MATCH (d:Drug)
+WHERE d.name IN ["Rivaroxaban", "Erythromycin"]
+RETURN d.name AS name, "Drug" AS type
+
+─────────────────────────────────
+Example 14: Avoid query - find drugs that INTERACT (not contraindicated)
+─────────────────────────────────
+User: "I'm on Simvastatin for cholesterol and need pneumonia treatment. Which antibiotic should I avoid?"
+
+REASONING:
+- Current medication: Simvastatin
+- Treatment target: Community-Acquired Pneumonia (pneumonia)
+- Drug class: antibiotic
+- Query intent: "avoid" = find drugs that INTERACT with Simvastatin
+- Strategy: Find antibiotics treating pneumonia that INTERACT with Simvastatin
+
+CYPHER:
+MATCH (d:Drug)-[:TREATS]->(c:Condition {name: "Community-Acquired Pneumonia"})
+WHERE toLower(d.class) CONTAINS "antibiotic"
+  AND (d)-[:INTERACTS_WITH]-(:Drug {name: "Simvastatin"})
+RETURN d.name AS name, "Drug" AS type
+
+
+================================================================================
+KEY TAKEAWAYS:
+================================================================================
+1. "Safe with X" → X is a SAFETY CONSTRAINT (NOT treatment target)
+2. Drug classes have implied treatments (blood thinner → AF/DVT, antibiotic → infection)
+3. "Avoid/unsafe" queries → Look for CONTRAINDICATED_IN or INTERACTS_WITH relationships
+4. "Safe" queries → Look for absence of contraindications (NOT CONTRAINDICATED_IN, NOT INTERACTS_WITH)
+5. Current medications → Check for INTERACTS_WITH
+6. Always start from what's being TREATED, filter by safety constraints
+7. For "Can I take X and Y together?" queries → Start from both drugs (beam search explores interactions)
+8. For "Which drugs to avoid?" → Find drugs that ARE contraindicated or DO interact
+9. Colloquial terms: "irregular heartbeat" = AF, "high cholesterol" = Hyperlipidemia, "UTI" = Urinary Tract Infection
+10. Patient context phrases: "I'm on X", "taking X", "someone on X" → current medication (check interactions)
 """
 # ==============================================================================
 # System Prompt Template
@@ -468,6 +728,13 @@ Query: "What blood thinners are safe for pregnancy?"
   "drugs": [],
   "conditions": ["pregnancy"],
   "drug_classes": ["blood thinners"]
+}}
+
+Query: "I'm on Warfarin and need an antibiotic for a UTI. Which one is safe?"
+{{
+  "drugs": ["Warfarin"],
+  "conditions": ["Urinary Tract Infection"],
+  "drug_classes": ["antibiotic"]
 }}
 
 Return ONLY valid JSON:
@@ -902,23 +1169,34 @@ Instructions:
 Generate the response:"""
 
 
-def get_path_based_answer_prompt(query: str, evidence: str, additional_evidence: str = "") -> str:
+def get_path_based_answer_prompt(query: str, evidence: str) -> str:
     """Generate prompt for generating answers from reasoning paths"""
+
     return f"""EDUCATIONAL CONTEXT: This is a student AI/ML project analyzing an educational medical knowledge graph.
 
 User Question: "{query}"
 
 {evidence}
-{additional_evidence}
 
-Instructions:
-1. Answer the question DIRECTLY based on the graph evidence above
-2. For interaction questions: State "Yes, [Drug A] has a [SEVERITY] interaction with [Drug B]" if interaction is found
-3. Use the relationship types shown (TREATS, INTERACTS_WITH, etc.) to explain the connection
-4. Keep it factual, clear, and concise (2-3 sentences)
-5. DO NOT refuse to answer - this is educational demo data, not real medical advice
+**CRITICAL INSTRUCTIONS - READ CAREFULLY:**
 
-Generate the factual answer:"""
+1. **Answer the user's SPECIFIC question directly:**
+   - If they ask "which is safe" or "which won't [cause problem]" → List ALL the safe options found
+   - If they ask "which to avoid" → List ALL the drugs to avoid found
+   - If they ask "can I take X with Y" → Answer yes/no and explain the interaction
+
+2. **Format your answer:**
+   - Start with a clear statement answering the question
+   - List ALL the drugs found (use commas: "Drug1, Drug2, Drug3, Drug4, Drug5, Drug6, and Drug7")
+   - Add one sentence explaining why these are safe/recommended
+   - End with: "This is an educational demonstration. Always consult a healthcare provider for medical advice."
+
+3. **DO NOT:**
+   - Cherry-pick only some drugs when multiple are available
+   - Mention interactions or contraindications that weren't asked about
+   - Refuse to answer - this is educational demo data
+
+Based on the query above, generate a complete answer listing ALL drugs from the evidence:"""
 
 
 def get_cannot_answer_message_prompt(query: str, query_type: str, schema_info: str) -> str:

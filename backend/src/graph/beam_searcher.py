@@ -81,6 +81,7 @@ class QueryIntent(BaseModel):
     intent_type: str = Field(default="safe", description="One of: 'avoid' (find contraindicated), 'safe' (find safe drugs), 'neutral' (just listing)")
     reasoning: str = Field(default="", description="Brief explanation of the intent")
 
+
 # ----------------------------------------------------------------------
 # 1. Path Dataclass
 # ----------------------------------------------------------------------
@@ -393,6 +394,7 @@ class BeamSearchReasoner:
                 "intent_type": "avoid" if is_avoid else "safe",
                 "reasoning": "Fallback keyword detection"
             }
+    
 
     # ------------------------------------------------------------------
     # Find starting nodes
@@ -1471,13 +1473,28 @@ ORDER BY d.name
     # ------------------------------------------------------------------
     # Main beam search
     # ------------------------------------------------------------------
-    def beam_search(self, query: str) -> List[Path]:
+    def beam_search(self, query: str, starting_nodes: List[Tuple[str, str]] = None) -> List[Path]:
+        """
+        Perform beam search to find reasoning paths.
+        
+        Args:
+            query: User's natural language query
+            starting_nodes: Optional pre-computed starting nodes. If None, will find them.
+        
+        Returns:
+            List of Path objects sorted by score
+        """
         logger.info(f"Starting beam search: {query}")
 
-        starting = self.find_starting_nodes(query)
-        if not starting:
+        # Use provided starting nodes or find them
+        if starting_nodes is None:
+            starting_nodes = self.find_starting_nodes(query)
+        
+        if not starting_nodes:
             logger.warning("No starting nodes")
             return []
+        
+        starting = starting_nodes
 
         # Initialize
         current_paths = []
@@ -1505,45 +1522,43 @@ ORDER BY d.name
     # ------------------------------------------------------------------
     def _generate_answer_with_llm(self, path: Path, query: str, all_paths: List[Path] = None, starting_nodes: List[Tuple[str, str]] = None) -> str:
         """Use LLM to generate natural language answer from reasoning path(s)"""
-        
-        # Check if query is about safe drugs and use simplified evidence format
-        query_lower = query.lower()
-        if starting_nodes and ("safe" in query_lower and "drug" in query_lower):
-            # Format paths as string
-            paths_str = ", ".join([" → ".join(p.nodes) for p in (all_paths or [path])])
-            evidence = f"All safe drugs: {', '.join([n[0] for n in starting_nodes])}\nPaths: {paths_str}"
-        else:
-            # Build labeled evidence from path with clear relationship types
-            if path.length() <= 1:
-                evidence = f"Graph Evidence:\n  • Found entity: {path.nodes[0]}"
-            else:
-                rel_map = {
-                    "TREATS": "TREATS",
-                    "CONTRAINDICATED_IN": "CONTRAINDICATED_IN",
-                    "REQUIRES_ADJUSTMENT": "REQUIRES_ADJUSTMENT",
-                    "INTERACTS_WITH": "INTERACTS_WITH",
-                    "CONTRAINDICATES": "CONTRAINDICATES",
+
+        # Format raw paths simply - let LLM decide what to show
+        paths_data = []
+        if all_paths:
+            for i, p in enumerate(all_paths[:5]):  # Top 5 paths
+                path_info = {
+                    "path_number": i + 1,
+                    "score": p.score,
+                    "nodes": p.nodes,
+                    "node_types": p.node_types,
+                    "relationships": p.relationships,
+                    "path_string": " → ".join(p.nodes)
                 }
-                steps = []
-                for i in range(len(path.relationships)):
-                    rel_text = rel_map.get(path.relationships[i], path.relationships[i])
-                    # Include node types for clarity
-                    node1_type = path.node_types[i] if i < len(path.node_types) else ""
-                    node2_type = path.node_types[i+1] if i+1 < len(path.node_types) else ""
-                    steps.append(f"  • {path.nodes[i]} ({node1_type}) --[{rel_text}]--> {path.nodes[i+1]} ({node2_type})")
-                evidence = "Graph Evidence:\n" + "\n".join(steps)
-        
-        # Include additional paths if available
-        additional_evidence = ""
-        if all_paths and len(all_paths) > 1:
-            other_paths = []
-            for p in all_paths[1:3]:  # Include up to 2 more paths
-                path_str = " → ".join(p.nodes)
-                other_paths.append(f"  • {path_str}")
-            if other_paths:
-                additional_evidence = f"\n\nAlternative connections found:\n" + "\n".join(other_paths)
-        
-        prompt = get_path_based_answer_prompt(query, evidence, additional_evidence)
+                paths_data.append(path_info)
+
+        # Extract all unique Drug nodes for reference
+        all_drug_nodes = set()
+        for p in all_paths or [path]:
+            for i, node in enumerate(p.nodes):
+                if i < len(p.node_types) and p.node_types[i] == "Drug":
+                    all_drug_nodes.add(node)
+
+        # Simple formatted evidence - LLM will decide what to show
+        evidence = f"""Beam Search Results:
+- Total paths found: {len(all_paths) if all_paths else 1}
+- Unique drugs found: {', '.join(sorted(all_drug_nodes)) if all_drug_nodes else 'None'}
+
+Paths (sorted by relevance score):
+"""
+        for p_info in paths_data:
+            evidence += f"""
+Path {p_info['path_number']} (score: {p_info['score']:.1f}):
+  Nodes: {' → '.join(p_info['nodes'])}
+  Relationships: {' → '.join(p_info['relationships'])}
+"""
+
+        prompt = get_path_based_answer_prompt(query, evidence)
 
         try:
             response = llm.invoke(prompt)
@@ -1599,26 +1614,30 @@ ORDER BY d.name
             return f"I cannot answer this question because the current knowledge graph doesn't contain the necessary information. The graph currently models drug-condition relationships (TREATS, CONTRAINDICATED_IN, INTERACTS_WITH), but doesn't include drug similarity, class hierarchies, or cross-allergenicity data that would be needed to answer your question."
 
     def answer_question(self, query: str) -> Dict[str, Any]:
-        """Main entry point - uses LLM to route to appropriate query strategy"""
+        """Main entry point - uses beam search for all queries"""
         
-        # Step 1: Classify query type using LLM
+        # Classify query type for informational purposes
         query_type = self.classify_query_type(query)
-        logger.info(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type} (routing to beam search)")
         
-        # Step 2: Try aggregation logic first for appropriate query types
-        if query_type in ["filtered_aggregation", "simple_aggregation", "interaction_check"]:
-            agg_result = self.execute_aggregation_query(query, query_type)
-            if agg_result:
-                logger.info(f"Query answered via aggregation with confidence {agg_result.get('confidence', 0):.2f}")
-                return agg_result
-            else:
-                logger.info("Aggregation failed, falling back to beam search")
+        # Use beam search for all queries
+        logger.info("Using beam search for query")
         
-        # Step 3: Fall back to beam search for path traversal or if aggregation failed
-        logger.info("Using beam search for path traversal")
-        # Get starting nodes for potential use in answer generation
+        # Find starting nodes once (not twice!)
         starting_nodes = self.find_starting_nodes(query)
-        paths = self.beam_search(query)
+        
+        if not starting_nodes:
+            # Use LLM to generate helpful explanation of why this can't be answered
+            explanation = self._generate_cannot_answer_message(query, query_type)
+            return {
+                "answer": explanation,
+                "paths": [],
+                "query_type": query_type,
+                "confidence": 0.0,
+            }
+        
+        # Pass starting nodes to beam search (avoids re-calling find_starting_nodes)
+        paths = self.beam_search(query, starting_nodes=starting_nodes)
         
         if not paths:
             # Use LLM to generate helpful explanation of why this can't be answered
