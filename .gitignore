@@ -1,0 +1,95 @@
+# =========================
+# OS-specific files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+# Packaging / build artifacts
+build/
+dist/
+pip-wheel-metadata/
+.eggs/
+*.egg-info/
+*.egg
+
+# Testing / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+pytest-debug.log
+
+# Type checking / linting caches
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# =========================
+# Editors / IDEs
+# =========================
+.vscode/
+.idea/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Cursor / local editor state
+.cursor/
+.history/
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+*.env
+secrets/
+secrets.*
+*.pem
+*.key
+*.crt
+
+# =========================
+# Databases / dumps
+# =========================
+*.sqlite
+*.db
+*.db-journal
+*.dump
+
+# =========================
+# Node (if present)
+# =========================
+node_modules/
+
+
