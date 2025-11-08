@@ -1,7 +1,7 @@
 # src/reasoning/llm_agent.py
 """
 LLM-guided action selector for Think-on-Graph beam search.
-Uses the globally-initialized AzureChatOpenAI instance (`llm`) from the project.
+Uses the globally-initialized Ollama LLM instance (`llm`) from the project.
 """
 
 import logging
@@ -72,7 +72,7 @@ If none are useful, reply "NONE".
 """
 
         # ------------------------------------------------------------------
-        # 2. Call Azure LLM (LangChain wrapper)
+        # 2. Call Ollama LLM
         # ------------------------------------------------------------------
         try:
             from langchain_core.messages import HumanMessage

@@ -1,7 +1,7 @@
 # src/reasoning/beam_searcher.py
 """
 Think-on-Graph Beam Search Engine with LLM Guidance
-Uses AzureChatOpenAI (llm) + Neo4j KG
+Uses Ollama (llm) + Neo4j KG
 """
 
 import os
