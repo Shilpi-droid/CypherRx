@@ -6,6 +6,7 @@ One call → finds best starting nodes in the graph
 
 import logging
 import re
+import time
 from pydantic import BaseModel, Field, ValidationError
 try:
     from backend.src.utils.llm_config import llm
@@ -29,6 +30,39 @@ except ModuleNotFoundError:
     )
 
 logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------------
+# Rate Limiting for LLM Calls
+# ----------------------------------------------------------------------
+_last_llm_call_time = None
+_MIN_DELAY_BETWEEN_CALLS = 30  # seconds
+
+def _rate_limited_llm_invoke(prompt_or_messages):
+    """
+    Wrapper for LLM invocation with rate limiting.
+
+    Args:
+        prompt_or_messages: Either a string prompt or list of messages
+
+    Returns:
+        LLM response
+    """
+    global _last_llm_call_time
+
+    # Apply rate limiting delay
+    if _last_llm_call_time is not None:
+        elapsed = time.time() - _last_llm_call_time
+        if elapsed < _MIN_DELAY_BETWEEN_CALLS:
+            wait_time = _MIN_DELAY_BETWEEN_CALLS - elapsed
+            logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next LLM call")
+            time.sleep(wait_time)
+
+    # Make the LLM call
+    response = llm.invoke(prompt_or_messages)
+
+    _last_llm_call_time = time.time()
+    return response
 
 
 class QueryPlan(BaseModel):
@@ -161,7 +195,7 @@ class QueryPlanner:
                 HumanMessage(content=user_prompt)
             ]
 
-            response = llm.invoke(messages)
+            response = _rate_limited_llm_invoke(messages)
             response_text = response.content.strip()
             
             # Extract Cypher from response (handle markdown code blocks if present)
@@ -200,7 +234,7 @@ class QueryPlanner:
                             HumanMessage(content=correction_prompt)
                         ]
 
-                        corrected_response = llm.invoke(correction_messages)
+                        corrected_response = _rate_limited_llm_invoke(correction_messages)
                         cypher = self._extract_cypher(corrected_response.content.strip())
                         logger.info(f"Regenerated Cypher:\n{cypher}")
 

@@ -5,6 +5,7 @@ Uses the globally-initialized Ollama LLM instance (`llm`) from the project.
 """
 
 import logging
+import time
 from typing import List, Dict
 
 # Import the **single** LLM instance you created in the root of the repo
@@ -14,6 +15,10 @@ except ModuleNotFoundError:
     from src.utils.llm_config import llm
 
 logger = logging.getLogger(__name__)
+
+# Rate limiting: Track last LLM call time
+_last_llm_call_time = None
+_MIN_DELAY_BETWEEN_CALLS = 25  # seconds
 
 class LLMAgent:
     """
@@ -54,7 +59,7 @@ class LLMAgent:
             target = n["name"]
             options.append(f"{i}. {path_nodes[-1]} {rel} {target}")
 
-        prompt = f"""You are a medical reasoning engine.  
+        prompt = f"""You are a medical reasoning engine.
 Query: "{query}"
 Current reasoning path: {path_str}
 
@@ -71,14 +76,27 @@ Return **only the numbers** of the best next steps, comma-separated (e.g. "1,3")
 If none are useful, reply "NONE".
 """
 
+        # Debug logging to see what the LLM is being asked
+        logger.debug(f"LLM Agent prompt:\n{prompt}")
+
         # ------------------------------------------------------------------
-        # 2. Call Ollama LLM
+        # 2. Call Ollama LLM (with rate limiting)
         # ------------------------------------------------------------------
         try:
             from langchain_core.messages import HumanMessage
-            
+
+            # Apply rate limiting delay
+            global _last_llm_call_time
+            if _last_llm_call_time is not None:
+                elapsed = time.time() - _last_llm_call_time
+                if elapsed < _MIN_DELAY_BETWEEN_CALLS:
+                    wait_time = _MIN_DELAY_BETWEEN_CALLS - elapsed
+                    logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next LLM call")
+                    time.sleep(wait_time)
+
             # Use LangChain message format
             response = llm.invoke([HumanMessage(content=prompt)])
+            _last_llm_call_time = time.time()
             choice_text = response.content.strip()
             logger.info(f"LLM raw response: {choice_text!r}")
 

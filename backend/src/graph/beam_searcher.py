@@ -6,6 +6,7 @@ Uses Ollama (llm) + Neo4j KG
 
 import os
 import logging
+import time
 from typing import List, Dict, Tuple, Any, Optional
 from dataclasses import dataclass
 from collections import defaultdict
@@ -59,6 +60,44 @@ except ModuleNotFoundError:
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------------
+# Rate Limiting for LLM Calls
+# ----------------------------------------------------------------------
+_last_llm_call_time = None
+_MIN_DELAY_BETWEEN_CALLS = 30  # seconds
+
+def _rate_limited_llm_invoke(prompt_or_messages, structured_output_class=None):
+    """
+    Wrapper for LLM invocation with rate limiting.
+
+    Args:
+        prompt_or_messages: Either a string prompt or list of messages
+        structured_output_class: Optional Pydantic model for structured output
+
+    Returns:
+        LLM response (structured or text)
+    """
+    global _last_llm_call_time
+
+    # Apply rate limiting delay
+    if _last_llm_call_time is not None:
+        elapsed = time.time() - _last_llm_call_time
+        if elapsed < _MIN_DELAY_BETWEEN_CALLS:
+            wait_time = _MIN_DELAY_BETWEEN_CALLS - elapsed
+            logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next LLM call")
+            time.sleep(wait_time)
+
+    # Make the LLM call
+    if structured_output_class:
+        structured_llm = llm.with_structured_output(structured_output_class)
+        response = structured_llm.invoke(prompt_or_messages)
+    else:
+        response = llm.invoke(prompt_or_messages)
+
+    _last_llm_call_time = time.time()
+    return response
 
 
 # ----------------------------------------------------------------------
@@ -190,7 +229,7 @@ class BeamSearchReasoner:
         prompt = get_entity_normalization_prompt(entity, entity_type, database_entities)
 
         try:
-            response = llm.invoke(prompt)
+            response = _rate_limited_llm_invoke(prompt)
             matched = response.content.strip()
             
             # Verify the matched term is actually in the database
@@ -258,19 +297,18 @@ class BeamSearchReasoner:
         prompt = get_query_classification_prompt(query)
 
         try:
-            # Use structured output with Pydantic
-            structured_llm = llm.with_structured_output(QueryClassification)
-            result = structured_llm.invoke(prompt)
-            
+            # Use structured output with Pydantic (rate-limited)
+            result = _rate_limited_llm_invoke(prompt, structured_output_class=QueryClassification)
+
             logger.info(f"Query classification: {result.query_type} (reasoning: {result.reasoning})")
             return result.query_type
-            
+
         except Exception as e:
             logger.warning(f"Structured classification failed: {e}. Using fallback parsing")
-            
+
             # Fallback to text parsing
             try:
-                response = llm.invoke(prompt)
+                response = _rate_limited_llm_invoke(prompt)
                 classification = response.content.strip().lower()
                 
                 if "interaction" in classification:
@@ -293,9 +331,8 @@ class BeamSearchReasoner:
         prompt = get_entity_extraction_prompt(query)
 
         try:
-            # Use structured output with Pydantic
-            structured_llm = llm.with_structured_output(ExtractedEntities)
-            entities = structured_llm.invoke(prompt)
+            # Use structured output with Pydantic (rate-limited)
+            entities = _rate_limited_llm_invoke(prompt, structured_output_class=ExtractedEntities)
             
             # Validate with Pydantic
             try:
@@ -324,7 +361,7 @@ class BeamSearchReasoner:
             
             # Fallback: try to parse JSON from text response
             try:
-                response = llm.invoke(prompt)
+                response = _rate_limited_llm_invoke(prompt)
                 content = response.content.strip()
                 
                 # Check if content is empty or just whitespace
@@ -375,9 +412,8 @@ class BeamSearchReasoner:
         prompt = get_query_intent_detection_prompt(query, entities)
         
         try:
-            # Use structured output with Pydantic
-            structured_llm = llm.with_structured_output(QueryIntent)
-            result = structured_llm.invoke(prompt)
+            # Use structured output with Pydantic (rate-limited)
+            result = _rate_limited_llm_invoke(prompt, structured_output_class=QueryIntent)
             
             logger.info(f"Query intent detection: is_avoid={result.is_avoid_query}, type={result.intent_type}, reasoning={result.reasoning}")
             return {
@@ -439,7 +475,7 @@ class BeamSearchReasoner:
         prompt = get_interaction_explanation_prompt(drug1, drug2, severity, description, query)
 
         try:
-            response = llm.invoke(prompt)
+            response = _rate_limited_llm_invoke(prompt)
             answer = response.content.strip()
             logger.info("Generated interaction explanation using LLM")
             return answer
@@ -454,7 +490,7 @@ class BeamSearchReasoner:
         prompt = get_no_interaction_explanation_prompt(drug1, drug2, query)
 
         try:
-            response = llm.invoke(prompt)
+            response = _rate_limited_llm_invoke(prompt)
             answer = response.content.strip()
             logger.info("Generated no-interaction response using LLM")
             return answer
@@ -520,7 +556,7 @@ class BeamSearchReasoner:
             return "Results found: " + str(len(results)) + " medications"
         
         try:
-            response = llm.invoke(prompt)
+            response = _rate_limited_llm_invoke(prompt)
             answer = response.content.strip()
             logger.info("Synthesized aggregation answer using LLM")
             return answer
@@ -556,7 +592,7 @@ class BeamSearchReasoner:
         intent_prompt = get_intent_analysis_prompt(query, entities)
 
         try:
-            response = llm.invoke(intent_prompt)
+            response = _rate_limited_llm_invoke(intent_prompt)
             intent = response.content.strip()
             logger.info(f"Query intent: {intent}")
             execution_context["intent_analysis"] = intent
@@ -643,7 +679,7 @@ class BeamSearchReasoner:
                 cypher_prompt = get_cypher_generation_prompt(query, intent, normalized_entities, schema_info)
                 logger.info("Generating Cypher query using LLM for filtered aggregation")
                 
-                cypher_response = llm.invoke(cypher_prompt)
+                cypher_response = _rate_limited_llm_invoke(cypher_prompt)
                 cypher = cypher_response.content.strip()
                 
                 # Clean up Cypher (remove markdown code blocks if present)
@@ -846,7 +882,7 @@ class BeamSearchReasoner:
                             retry_prompt = get_cypher_generation_prompt(query, intent, entities, schema_info) + "\n\n" + error_feedback
                             
                             try:
-                                retry_response = llm.invoke(retry_prompt)
+                                retry_response = _rate_limited_llm_invoke(retry_prompt)
                                 cypher = retry_response.content.strip()
                                 
                                 # Sanitize again
@@ -1339,9 +1375,9 @@ ORDER BY d.name
                             query, specific_drug, drug_class, evidence_text, len(records), max_severity
                         )
                         
-                        llm_response = llm.invoke(answer_prompt)
+                        llm_response = _rate_limited_llm_invoke(answer_prompt)
                         answer = llm_response.content.strip()
-                        
+
                         return {
                             "answer": answer,
                             "interactions": records,
@@ -1352,8 +1388,8 @@ ORDER BY d.name
                     else:
                         # No interactions found with drugs in that class
                         answer_prompt = get_no_drug_class_interaction_answer_prompt(query, specific_drug, drug_class)
-                        
-                        llm_response = llm.invoke(answer_prompt)
+
+                        llm_response = _rate_limited_llm_invoke(answer_prompt)
                         answer = llm_response.content.strip()
                         
                         return {
@@ -1561,7 +1597,7 @@ Path {p_info['path_number']} (score: {p_info['score']:.1f}):
         prompt = get_path_based_answer_prompt(query, evidence)
 
         try:
-            response = llm.invoke(prompt)
+            response = _rate_limited_llm_invoke(prompt)
             answer = response.content.strip()
             logger.info("Generated answer using LLM")
             return answer
@@ -1605,7 +1641,7 @@ Path {p_info['path_number']} (score: {p_info['score']:.1f}):
         prompt = get_cannot_answer_message_prompt(query, query_type, schema_info)
 
         try:
-            response = llm.invoke(prompt)
+            response = _rate_limited_llm_invoke(prompt)
             answer = response.content.strip()
             logger.info("Generated 'cannot answer' explanation using LLM")
             return answer
