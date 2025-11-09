@@ -2,14 +2,17 @@
 import axios from 'axios';
 import { QueryResult } from '../types';
 
-const API_BASE_URL = (process.env.REACT_APP_API_URL as string) || 'http://localhost:8000';
+const API_BASE_URL = 'https://cypherrx-backend.vercel.app';
+
 
 export const queryKnowledgeGraph = async (query: string): Promise<QueryResult> => {
   try {
     const response = await axios.post(`${API_BASE_URL}/query`, {
       query,
-      beam_width: 5,
+      beam_width: 3,
       max_depth: 4
+    }, {
+      timeout: 2400000 // 4 minutes
     });
     return response.data;
   } catch (error) {
@@ -20,7 +23,9 @@ export const queryKnowledgeGraph = async (query: string): Promise<QueryResult> =
 
 export const getGraphStats = async () => {
   try {
-    const response = await axios.get(`${API_BASE_URL}/stats`);
+    const response = await axios.get(`${API_BASE_URL}/stats`, {
+      timeout: 240000 // 4 minutes
+    });
     return response.data;
   } catch (error) {
     console.error('API Error:', error);
