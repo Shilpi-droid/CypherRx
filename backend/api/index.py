@@ -14,9 +14,12 @@ from src.graph.beam_searcher import BeamSearchReasoner
 app = Flask(__name__)
 
 # CORS middleware
+DEFAULT_ORIGINS = ["http://localhost:3000", "https://cypherrx.vercel.app"]
+EXTRA_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
+
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000"],  # React dev server
+        "origins": DEFAULT_ORIGINS + EXTRA_ORIGINS,
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
