@@ -9,16 +9,13 @@ import time
 from typing import List, Dict
 
 # Import the **single** LLM instance you created in the root of the repo
-try:
-    from backend.src.utils.llm_config import llm
-except ModuleNotFoundError:
-    from src.utils.llm_config import llm
+
+from backend.src.utils.llm_config import llm,invoke_with_retry
+from backend.src.graph.relationship_direction import directional_phrase
 
 logger = logging.getLogger(__name__)
 
-# Rate limiting: Track last LLM call time
-_last_llm_call_time = None
-_MIN_DELAY_BETWEEN_CALLS = 25  # seconds
+
 
 class LLMAgent:
     """
@@ -57,7 +54,9 @@ class LLMAgent:
         for i, n in enumerate(neighbors[:12], start=1):
             rel = n["relationship"]
             target = n["name"]
-            options.append(f"{i}. {path_nodes[-1]} {rel} {target}")
+            direction = n.get("direction", "outgoing")
+            phrase = directional_phrase(path_nodes[-1], rel, target, direction)
+            options.append(f"{i}. {phrase}")
 
         prompt = f"""You are a medical reasoning engine.
 Query: "{query}"
@@ -85,18 +84,8 @@ If none are useful, reply "NONE".
         try:
             from langchain_core.messages import HumanMessage
 
-            # Apply rate limiting delay
-            global _last_llm_call_time
-            if _last_llm_call_time is not None:
-                elapsed = time.time() - _last_llm_call_time
-                if elapsed < _MIN_DELAY_BETWEEN_CALLS:
-                    wait_time = _MIN_DELAY_BETWEEN_CALLS - elapsed
-                    logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next LLM call")
-                    time.sleep(wait_time)
-
             # Use LangChain message format
-            response = llm.invoke([HumanMessage(content=prompt)])
-            _last_llm_call_time = time.time()
+            response = invoke_with_retry([HumanMessage(content=prompt)])            
             choice_text = response.content.strip()
             logger.info(f"LLM raw response: {choice_text!r}")
 

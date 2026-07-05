@@ -1,5 +1,5 @@
 import React from 'react';
-import { Menu, X, History } from 'lucide-react';
+import { X, History } from 'lucide-react';
 import QueryHistory from './QueryHistory';
 import { HistoryEntry } from '../types';
 
@@ -59,17 +59,6 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         </div>
       </div>
-
-      {/* Toggle Button (when sidebar is closed) */}
-      {!isOpen && (
-        <button
-          onClick={onToggle}
-          className="fixed top-4 left-4 z-40 p-3 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg hover:shadow-xl transition-all hover:scale-105 hover:bg-white"
-          aria-label="Open sidebar"
-        >
-          <Menu className="w-6 h-6 text-gray-800" />
-        </button>
-      )}
     </>
   );
 };

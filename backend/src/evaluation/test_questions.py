@@ -222,7 +222,7 @@ def save_test_questions():
         "complex": COMPLEX_QUESTIONS
     }
     
-    with open('data/test_questions.json', 'w') as f:
+    with open('src/evaluation/test_questions.json', 'w') as f:
         json.dump(all_questions, f, indent=2)
     
     total = len(SIMPLE_QUESTIONS) + len(MEDIUM_QUESTIONS) + len(COMPLEX_QUESTIONS)

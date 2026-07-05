@@ -32,3 +32,26 @@ export interface Node {
     result: QueryResult;
     timestamp: string;
   }
+
+  export interface FullGraphNode {
+    id: string;
+    name: string;
+    type: string;
+  }
+
+  export interface FullGraphLink {
+    source: string;
+    target: string;
+    relationship: string;
+  }
+
+  export interface FullGraphData {
+    nodes: FullGraphNode[];
+    links: FullGraphLink[];
+  }
+
+  export type StreamEvent =
+    | { type: 'starting_nodes'; nodes: { name: string; type: string }[] }
+    | { type: 'depth'; depth: number; max_depth: number; paths: Path[]; confidence: number }
+    | { type: 'final'; answer: string; paths: Path[]; confidence: number; query_type?: string }
+    | { type: 'error'; error: string };

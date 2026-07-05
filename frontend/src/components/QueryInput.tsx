@@ -8,10 +8,10 @@ interface QueryInputProps {
 }
 
 const EXAMPLE_QUERIES = [
-  "What are the side effects of Aspirin?",
-  "What drugs treat Type 2 Diabetes?",
-  "What medications are safe for kidney disease patients?",
-  "Which hypertension drugs don't cause fatigue?",
+  "I'm on Warfarin and need an antibiotic for a UTI. Which one is safe?",
+  "I'm on Apixaban and have chronic kidney disease. Which blood thinner is safest?",
+  "I take Metformin and Simvastatin. I have a sinus infection. Can I take Amoxicillin?",
+  "I'm on Warfarin for DVT. I need pain relief. Can I take Ibuprofen?",
 ];
 
 export const QueryInput: React.FC<QueryInputProps> = ({ onSubmit, loading }) => {
@@ -39,7 +39,7 @@ export const QueryInput: React.FC<QueryInputProps> = ({ onSubmit, loading }) => 
           <button
             type="submit"
             disabled={loading || !query.trim()}
-            className="absolute right-2 top-2 p-2 bg-primary text-white rounded-xl hover:bg-blue-600 disabled:bg-gray-400 transition-all"
+            className="absolute right-2 top-2 p-2 bg-primary text-white rounded-xl hover:bg-primary/90 disabled:bg-gray-400 transition-all"
           >
             {loading ? (
               <Loader2 className="w-6 h-6 animate-spin" />
@@ -52,12 +52,12 @@ export const QueryInput: React.FC<QueryInputProps> = ({ onSubmit, loading }) => 
 
       {/* Example queries */}
       <div className="mt-4 flex flex-wrap gap-2">
-        <span className="text-white text-sm font-medium">Try:</span>
+        <span className="text-secondary text-sm font-medium">Try:</span>
         {EXAMPLE_QUERIES.map((example, idx) => (
           <button
             key={idx}
             onClick={() => setQuery(example)}
-            className="text-xs bg-white/20 backdrop-blur-sm text-white px-3 py-1 rounded-full hover:bg-white/30 transition-all"
+            className="text-xs bg-green-100 text-green-800 px-3 py-1 rounded-full hover:bg-green-200 transition-all"
           >
             {example}
           </button>

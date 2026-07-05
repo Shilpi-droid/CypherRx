@@ -1180,23 +1180,27 @@ User Question: "{query}"
 
 **CRITICAL INSTRUCTIONS - READ CAREFULLY:**
 
-1. **Answer the user's SPECIFIC question directly:**
-   - If they ask "which is safe" or "which won't [cause problem]" → List ALL the safe options found
-   - If they ask "which to avoid" → List ALL the drugs to avoid found
-   - If they ask "can I take X with Y" → Answer yes/no and explain the interaction
+1. **Interpret relationship types correctly:**
+   - TREATS → the drug is used to treat that condition
+   - INTERACTS_WITH → the two drugs have a dangerous interaction (combining them is NOT safe)
+   - CONTRAINDICATED_IN / CONTRAINDICATES → the drug should NOT be used in that situation
+   - REQUIRES_ADJUSTMENT → use with caution, dosage adjustment needed
 
-2. **Format your answer:**
-   - Start with a clear statement answering the question
-   - List ALL the drugs found (use commas: "Drug1, Drug2, Drug3, Drug4, Drug5, Drug6, and Drug7")
-   - Add one sentence explaining why these are safe/recommended
+2. **Answer the user's SPECIFIC question directly:**
+   - If they ask "which is safe" → only list drugs that TREAT the condition AND do NOT have an INTERACTS_WITH or CONTRAINDICATED relationship with any drug the patient is already taking
+   - If they ask "which to avoid" → list drugs that have INTERACTS_WITH or CONTRAINDICATED relationships
+   - If they ask "can I take X with Y" → check for INTERACTS_WITH between X and Y; answer yes/no and explain
+
+3. **Format your answer:**
+   - Start with a clear direct statement answering the question
+   - List the relevant drugs with a brief reason
    - End with: "This is an educational demonstration. Always consult a healthcare provider for medical advice."
 
-3. **DO NOT:**
-   - Cherry-pick only some drugs when multiple are available
-   - Mention interactions or contraindications that weren't asked about
+4. **DO NOT:**
+   - List a drug as "safe" if the evidence shows it INTERACTS_WITH or is CONTRAINDICATED with the patient's current medication
    - Refuse to answer - this is educational demo data
 
-Based on the query above, generate a complete answer listing ALL drugs from the evidence:"""
+Based on the evidence and relationship types above, generate a correct and complete answer:"""
 
 
 def get_cannot_answer_message_prompt(query: str, query_type: str, schema_info: str) -> str:

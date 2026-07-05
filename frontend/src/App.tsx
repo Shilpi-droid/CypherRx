@@ -1,17 +1,19 @@
 // src/App.tsx
 import React, { useState } from 'react';
-import { Activity, Github, Info } from 'lucide-react';
+import { Activity, Github, Info, Loader2, Menu, Network } from 'lucide-react';
 import { QueryInput } from './components/QueryInput';
 import { AnswerDisplay } from './components/AnswerDisplay';
 import { ReasoningPath } from './components/ReasoningPath';
 import { ConfidenceGauge } from './components/ConfidenceGauge';
 import { GraphVisualization } from './components/GraphVisualization';
+import { FullGraphView } from './components/FullGraphView';
 import Sidebar from './components/Sidebar';
 import { useQuery } from './hooks/useQuery';
 
 function App() {
-  const { executeQuery, loading, error, result, history, clearHistory } = useQuery();
+  const { executeQuery, loading, error, result, history, clearHistory, progress } = useQuery();
   const [showAbout, setShowAbout] = useState(false);
+  const [showFullGraph, setShowFullGraph] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const handleQuery = async (query: string) => {
@@ -30,36 +32,52 @@ function App() {
       />
 
       {/* Header */}
-      <header className="bg-white/10 backdrop-blur-md border-b border-white/20">
+      <header className="bg-secondary border-b border-black/20">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-white rounded-xl">
-                <Activity className="w-8 h-8 text-primary" />
+              <button
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                className="p-2 bg-black/20 hover:bg-black/30 text-primary rounded-lg transition-all"
+                aria-label="Open recent queries"
+              >
+                <Menu className="w-6 h-6" />
+              </button>
+
+              <div className="p-2 bg-primary rounded-xl">
+                <Activity className="w-8 h-8 text-white" />
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-white">
                   Medical Knowledge Graph
                 </h1>
-                <p className="text-white/80 text-sm">
+                <p className="text-white/70 text-sm">
                   Multi-hop causal reasoning assistant
                 </p>
               </div>
             </div>
-            
-            <div className="flex items-center gap-4">
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowFullGraph(true)}
+                className="flex items-center gap-2 px-3 py-2 bg-black/20 hover:bg-black/30 text-primary rounded-lg transition-all text-sm font-medium"
+              >
+                <Network className="w-5 h-5" />
+                View Full Graph
+              </button>
+
               <button
                 onClick={() => setShowAbout(!showAbout)}
-                className="p-2 text-white hover:bg-white/10 rounded-lg transition-all"
+                className="p-2 bg-black/20 hover:bg-black/30 text-primary rounded-lg transition-all"
               >
                 <Info className="w-6 h-6" />
               </button>
-              
+
               <a
                 href="https://github.com/Shilpi-droid/CypherRx"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-2 text-white hover:bg-white/10 rounded-lg transition-all"
+                className="p-2 bg-black/20 hover:bg-black/30 text-primary rounded-lg transition-all"
               >
                 <Github className="w-6 h-6" />
               </a>
@@ -75,7 +93,7 @@ function App() {
             <h2 className="text-2xl font-bold mb-4">About This Project</h2>
             <div className="space-y-4 text-gray-700">
               <p>
-                <strong>Medical Knowledge Graph Assistant</strong> uses advanced causal reasoning 
+                <strong>Medical Knowledge Graph Assistant</strong> uses advanced causal reasoning
                 over a knowledge graph containing drugs, diseases, and biological mechanisms.
               </p>
               <div>
@@ -91,24 +109,27 @@ function App() {
               <div>
                 <h3 className="font-semibold mb-2">Tech Stack:</h3>
                 <p className="text-sm">
-                  React + TypeScript, Neo4j, Python, Beam Search Algorithm, 
+                  React + TypeScript, Neo4j, Python, Beam Search Algorithm,
                   Sentence Transformers
                 </p>
               </div>
               <p className="text-sm text-yellow-700 bg-yellow-50 p-3 rounded">
-                ⚠️ <strong>Disclaimer:</strong> For educational purposes only. 
+                ⚠️ <strong>Disclaimer:</strong> For educational purposes only.
                 Not a substitute for professional medical advice.
               </p>
             </div>
             <button
               onClick={() => setShowAbout(false)}
-              className="mt-6 w-full py-2 bg-primary text-white rounded-lg hover:bg-blue-600"
+              className="mt-6 w-full py-2 bg-primary text-white rounded-lg hover:bg-primary/90"
             >
               Close
             </button>
           </div>
         </div>
       )}
+
+      {/* Full Graph Modal */}
+      {showFullGraph && <FullGraphView onClose={() => setShowFullGraph(false)} />}
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-12">
@@ -123,35 +144,68 @@ function App() {
           </div>
         )}
 
+        {/* Live reasoning progress */}
+        {loading && (
+          <div className="max-w-4xl mx-auto mb-6 flex items-center gap-3 p-4 bg-white shadow-lg border border-gray-200 rounded-xl text-gray-700">
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            <span className="text-sm">
+              {progress
+                ? `Exploring the graph... depth ${progress.depth} of ${progress.maxDepth}`
+                : 'Finding relevant starting points...'}
+            </span>
+          </div>
+        )}
+
         {/* Results */}
         {result && (
           <div className="max-w-6xl mx-auto">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
               <div className="lg:col-span-2">
-                <AnswerDisplay 
-                  answer={result.answer} 
-                  confidence={result.confidence} 
-                />
+                {result.answer ? (
+                  <AnswerDisplay
+                    answer={result.answer}
+                    confidence={result.confidence}
+                  />
+                ) : (
+                  <div className="bg-white rounded-2xl shadow-xl p-6 flex items-center gap-3 text-gray-500">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>Still reasoning through the graph below...</span>
+                  </div>
+                )}
               </div>
               <div>
                 <ConfidenceGauge confidence={result.confidence} />
               </div>
             </div>
 
-            <ReasoningPath paths={result.paths} />
-
-            {result.paths.length > 0 && (
-              <GraphVisualization paths={result.paths} />
-            )}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2">
+                <ReasoningPath paths={result.paths} />
+              </div>
+              <div>
+                {result.paths.length > 0 ? (
+                  <GraphVisualization
+                    paths={result.paths}
+                    compact
+                    onExpand={() => setShowFullGraph(true)}
+                  />
+                ) : (
+                  <div className="bg-white rounded-2xl shadow-xl p-6 text-sm text-gray-500">
+                    <h2 className="text-lg font-bold text-gray-800 mb-2">Knowledge Graph</h2>
+                    No graph to show — no reasoning path was found for this answer.
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
       </main>
 
       {/* Footer */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-white/10 backdrop-blur-md border-t border-white/20">
+      <footer className="fixed bottom-0 left-0 right-0 bg-secondary border-t border-black/20">
         <div className="container mx-auto px-4 py-3">
-          <p className="text-center text-white/80 text-sm">
+          <p className="text-center text-white/70 text-sm">
             Built with React, Neo4j, and ❤️ | Portfolio Project 2025
           </p>
         </div>
@@ -161,4 +215,3 @@ function App() {
 }
 
 export default App;
-

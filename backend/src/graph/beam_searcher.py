@@ -5,6 +5,7 @@ Uses Ollama (llm) + Neo4j KG
 """
 
 import os
+import json
 import logging
 import time
 from typing import List, Dict, Tuple, Any, Optional
@@ -16,88 +17,30 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 # === Your LLM instance (shared across project) ===
-try:
-    from backend.src.utils.llm_config import llm
-    from backend.src.graph.llm_agent import LLMAgent
-    from backend.src.graph.query_planner import QueryPlanner
-    from backend.src.graph.prompts import (
-        get_query_classification_prompt,
-        get_entity_normalization_prompt,
-        get_entity_extraction_prompt,
-        get_interaction_explanation_prompt,
-        get_no_interaction_explanation_prompt,
-        get_simple_aggregation_answer_prompt,
-        get_filtered_aggregation_answer_prompt,
-        get_intent_analysis_prompt,
-        get_drug_class_interaction_answer_prompt,
-        get_no_drug_class_interaction_answer_prompt,
-        get_path_based_answer_prompt,
-        get_cannot_answer_message_prompt,
-        get_cypher_generation_prompt,
-        get_query_intent_detection_prompt,
-    )
-except ModuleNotFoundError:
-    # If running from backend directory
-    from src.utils.llm_config import llm
-    from src.graph.llm_agent import LLMAgent
-    from src.graph.query_planner import QueryPlanner
-    from src.graph.prompts import (
-        get_query_classification_prompt,
-        get_entity_normalization_prompt,
-        get_entity_extraction_prompt,
-        get_interaction_explanation_prompt,
-        get_no_interaction_explanation_prompt,
-        get_simple_aggregation_answer_prompt,
-        get_filtered_aggregation_answer_prompt,
-        get_intent_analysis_prompt,
-        get_drug_class_interaction_answer_prompt,
-        get_no_drug_class_interaction_answer_prompt,
-        get_path_based_answer_prompt,
-        get_cannot_answer_message_prompt,
-        get_cypher_generation_prompt,
-        get_query_intent_detection_prompt,
-    )
+
+from backend.src.utils.llm_config import llm, invoke_with_retry
+from backend.src.graph.llm_agent import LLMAgent
+from backend.src.graph.relationship_direction import directional_relationship, directional_phrase
+from backend.src.graph.query_planner import QueryPlanner
+from backend.src.graph.prompts import (
+    get_query_classification_prompt,
+    get_entity_normalization_prompt,
+    get_entity_extraction_prompt,
+    get_interaction_explanation_prompt,
+    get_no_interaction_explanation_prompt,
+    get_simple_aggregation_answer_prompt,
+    get_filtered_aggregation_answer_prompt,
+    get_intent_analysis_prompt,
+    get_drug_class_interaction_answer_prompt,
+    get_no_drug_class_interaction_answer_prompt,
+    get_path_based_answer_prompt,
+    get_cannot_answer_message_prompt,
+    get_cypher_generation_prompt,
+    get_query_intent_detection_prompt,
+)
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-# ----------------------------------------------------------------------
-# Rate Limiting for LLM Calls
-# ----------------------------------------------------------------------
-_last_llm_call_time = None
-_MIN_DELAY_BETWEEN_CALLS = 30  # seconds
-
-def _rate_limited_llm_invoke(prompt_or_messages, structured_output_class=None):
-    """
-    Wrapper for LLM invocation with rate limiting.
-
-    Args:
-        prompt_or_messages: Either a string prompt or list of messages
-        structured_output_class: Optional Pydantic model for structured output
-
-    Returns:
-        LLM response (structured or text)
-    """
-    global _last_llm_call_time
-
-    # Apply rate limiting delay
-    if _last_llm_call_time is not None:
-        elapsed = time.time() - _last_llm_call_time
-        if elapsed < _MIN_DELAY_BETWEEN_CALLS:
-            wait_time = _MIN_DELAY_BETWEEN_CALLS - elapsed
-            logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next LLM call")
-            time.sleep(wait_time)
-
-    # Make the LLM call
-    if structured_output_class:
-        structured_llm = llm.with_structured_output(structured_output_class)
-        response = structured_llm.invoke(prompt_or_messages)
-    else:
-        response = llm.invoke(prompt_or_messages)
-
-    _last_llm_call_time = time.time()
-    return response
 
 
 # ----------------------------------------------------------------------
@@ -157,6 +100,20 @@ class Path:
             "evidence": self.evidence,
             "llm_reasoning": self.llm_reasoning,
         }
+
+# `score_path()` starts at 100 and stacks uncapped bonuses on top (e.g. +30 the
+# instant a path touches both a Drug and a Condition node, which happens on hop
+# 1 for nearly every query) - real scores routinely land well above 100. Mapping
+# confidence directly as score/100 saturates at 100% almost immediately regardless
+# of search depth, so instead spread a realistic score band across 0-100%.
+CONFIDENCE_SCORE_FLOOR = 80.0    # a bare, low-relevance path
+CONFIDENCE_SCORE_CEILING = 200.0  # a strong, multi-bonus path
+
+
+def score_to_confidence(score: float) -> float:
+    span = CONFIDENCE_SCORE_CEILING - CONFIDENCE_SCORE_FLOOR
+    return max(0.0, min(1.0, (score - CONFIDENCE_SCORE_FLOOR) / span))
+
 
 class BeamSearchReasoner:
     def __init__(self, beam_width: int = 3, max_depth: int = 4):
@@ -229,7 +186,7 @@ class BeamSearchReasoner:
         prompt = get_entity_normalization_prompt(entity, entity_type, database_entities)
 
         try:
-            response = _rate_limited_llm_invoke(prompt)
+            response = invoke_with_retry(prompt)
             matched = response.content.strip()
             
             # Verify the matched term is actually in the database
@@ -298,7 +255,7 @@ class BeamSearchReasoner:
 
         try:
             # Use structured output with Pydantic (rate-limited)
-            result = _rate_limited_llm_invoke(prompt, structured_output_class=QueryClassification)
+            result = invoke_with_retry(prompt, structured_output_class=QueryClassification)
 
             logger.info(f"Query classification: {result.query_type} (reasoning: {result.reasoning})")
             return result.query_type
@@ -308,7 +265,7 @@ class BeamSearchReasoner:
 
             # Fallback to text parsing
             try:
-                response = _rate_limited_llm_invoke(prompt)
+                response = invoke_with_retry(prompt)
                 classification = response.content.strip().lower()
                 
                 if "interaction" in classification:
@@ -332,7 +289,7 @@ class BeamSearchReasoner:
 
         try:
             # Use structured output with Pydantic (rate-limited)
-            entities = _rate_limited_llm_invoke(prompt, structured_output_class=ExtractedEntities)
+            entities = invoke_with_retry(prompt, structured_output_class=ExtractedEntities)
             
             # Validate with Pydantic
             try:
@@ -361,15 +318,13 @@ class BeamSearchReasoner:
             
             # Fallback: try to parse JSON from text response
             try:
-                response = _rate_limited_llm_invoke(prompt)
+                response = invoke_with_retry(prompt)
                 content = response.content.strip()
                 
                 # Check if content is empty or just whitespace
                 if not content or content == "{}":
                     logger.warning("Empty response from LLM fallback")
                     return {"drugs": [], "conditions": [], "drug_classes": []}
-                
-                import json
                 
                 # Try to clean up common JSON issues
                 if '```json' in content:
@@ -389,23 +344,6 @@ class BeamSearchReasoner:
                 logger.warning(f"Fallback entity extraction failed: {e2}")
                 return {"drugs": [], "conditions": [], "drug_classes": []}
 
-    def extract_keywords(self, query: str) -> List[str]:
-        """Legacy keyword extraction - kept for fallback"""
-        query_lower = query.lower()
-        known_terms = [
-            # Drugs
-            "metformin", "insulin", "warfarin", "apixaban", "amoxicillin", "lisinopril",
-            "atorvastatin", "sitagliptin", "semaglutide", "levothyroxine",
-            # Conditions
-            "diabetes", "hypertension", "pneumonia", "kidney disease", "atrial fibrillation",
-            "depression", "asthma", "gout", "pregnancy", "uti"
-        ]
-        found = [term.title() for term in known_terms if term in query_lower]
-        if not found:
-            words = [w.title() for w in query_lower.split() if len(w) > 4]
-            found = words[:3]
-        return found
-
     def detect_query_intent(self, query: str, entities: Dict[str, List[str]]) -> Dict[str, Any]:
         """Use LLM to detect if query is asking for 'avoid' or 'safe' drugs"""
         # Use the function already imported at the top of the file
@@ -413,7 +351,7 @@ class BeamSearchReasoner:
         
         try:
             # Use structured output with Pydantic (rate-limited)
-            result = _rate_limited_llm_invoke(prompt, structured_output_class=QueryIntent)
+            result = invoke_with_retry(prompt, structured_output_class=QueryIntent)
             
             logger.info(f"Query intent detection: is_avoid={result.is_avoid_query}, type={result.intent_type}, reasoning={result.reasoning}")
             return {
@@ -475,7 +413,7 @@ class BeamSearchReasoner:
         prompt = get_interaction_explanation_prompt(drug1, drug2, severity, description, query)
 
         try:
-            response = _rate_limited_llm_invoke(prompt)
+            response = invoke_with_retry(prompt)
             answer = response.content.strip()
             logger.info("Generated interaction explanation using LLM")
             return answer
@@ -490,7 +428,7 @@ class BeamSearchReasoner:
         prompt = get_no_interaction_explanation_prompt(drug1, drug2, query)
 
         try:
-            response = _rate_limited_llm_invoke(prompt)
+            response = invoke_with_retry(prompt)
             answer = response.content.strip()
             logger.info("Generated no-interaction response using LLM")
             return answer
@@ -556,7 +494,7 @@ class BeamSearchReasoner:
             return "Results found: " + str(len(results)) + " medications"
         
         try:
-            response = _rate_limited_llm_invoke(prompt)
+            response = invoke_with_retry(prompt)
             answer = response.content.strip()
             logger.info("Synthesized aggregation answer using LLM")
             return answer
@@ -592,7 +530,7 @@ class BeamSearchReasoner:
         intent_prompt = get_intent_analysis_prompt(query, entities)
 
         try:
-            response = _rate_limited_llm_invoke(intent_prompt)
+            response = invoke_with_retry(intent_prompt)
             intent = response.content.strip()
             logger.info(f"Query intent: {intent}")
             execution_context["intent_analysis"] = intent
@@ -679,7 +617,7 @@ class BeamSearchReasoner:
                 cypher_prompt = get_cypher_generation_prompt(query, intent, normalized_entities, schema_info)
                 logger.info("Generating Cypher query using LLM for filtered aggregation")
                 
-                cypher_response = _rate_limited_llm_invoke(cypher_prompt)
+                cypher_response = invoke_with_retry(cypher_prompt)
                 cypher = cypher_response.content.strip()
                 
                 # Clean up Cypher (remove markdown code blocks if present)
@@ -882,7 +820,7 @@ class BeamSearchReasoner:
                             retry_prompt = get_cypher_generation_prompt(query, intent, entities, schema_info) + "\n\n" + error_feedback
                             
                             try:
-                                retry_response = _rate_limited_llm_invoke(retry_prompt)
+                                retry_response = invoke_with_retry(retry_prompt)
                                 cypher = retry_response.content.strip()
                                 
                                 # Sanitize again
@@ -1375,7 +1313,7 @@ ORDER BY d.name
                             query, specific_drug, drug_class, evidence_text, len(records), max_severity
                         )
                         
-                        llm_response = _rate_limited_llm_invoke(answer_prompt)
+                        llm_response = invoke_with_retry(answer_prompt)
                         answer = llm_response.content.strip()
 
                         return {
@@ -1389,7 +1327,7 @@ ORDER BY d.name
                         # No interactions found with drugs in that class
                         answer_prompt = get_no_drug_class_interaction_answer_prompt(query, specific_drug, drug_class)
 
-                        llm_response = _rate_limited_llm_invoke(answer_prompt)
+                        llm_response = invoke_with_retry(answer_prompt)
                         answer = llm_response.content.strip()
                         
                         return {
@@ -1410,12 +1348,21 @@ ORDER BY d.name
     def get_neighbors(self, node_name: str, node_type: str) -> List[Dict]:
         label = node_type.split(";")[0]
         cypher = f"""
-        MATCH (n:{label} {{name: $name}})-[r]-(neighbor)
-        RETURN 
+        MATCH (n:{label} {{name: $name}})-[r]->(neighbor)
+        RETURN
             neighbor.name AS name,
             labels(neighbor)[0] AS type,
             type(r) AS relationship,
-            properties(r) AS rel_props
+            properties(r) AS rel_props,
+            'outgoing' AS direction
+        UNION
+        MATCH (n:{label} {{name: $name}})<-[r]-(neighbor)
+        RETURN
+            neighbor.name AS name,
+            labels(neighbor)[0] AS type,
+            type(r) AS relationship,
+            properties(r) AS rel_props,
+            'incoming' AS direction
         LIMIT 50
         """
         with self.driver.session(database=self.database) as session:
@@ -1442,8 +1389,8 @@ ORDER BY d.name
 
         # Medical importance
         rel_bonus = {
-            "TREATS": 20,
-            "CONTRAINDICATED_IN": 25, "REQUIRES_ADJUSTMENT": 18,
+            "TREATS": 20, "TREATED_BY": 20,
+            "CONTRAINDICATED_IN": 25, "REQUIRES_ADJUSTMENT": 18, "ADJUSTMENT_REQUIRED_FOR": 18,
             "INTERACTS_WITH": 20, "CONTRAINDICATES": 20
         }
         for rel in path.relationships:
@@ -1488,12 +1435,15 @@ ORDER BY d.name
 
                 expanded = True
                 justification = neighbor.get("_llm_justification", "Graph expansion")
+                direction = neighbor.get("direction", "outgoing")
+                display_relationship = directional_relationship(neighbor["relationship"], direction)
+                evidence_line = directional_phrase(last_node, neighbor["relationship"], neighbor["name"], direction)
 
                 new_path = Path(
                     nodes=path.nodes + [neighbor["name"]],
                     node_types=path.node_types + [neighbor["type"]],
-                    relationships=path.relationships + [neighbor["relationship"]],
-                    evidence=path.evidence + [f"{last_node} {neighbor['relationship']} {neighbor['name']}"],
+                    relationships=path.relationships + [display_relationship],
+                    evidence=path.evidence + [evidence_line],
                     llm_reasoning=path.llm_reasoning + [justification],
                 )
                 new_path.score = self.score_path(new_path, query)
@@ -1509,14 +1459,36 @@ ORDER BY d.name
     # ------------------------------------------------------------------
     # Main beam search
     # ------------------------------------------------------------------
+    def _beam_search_steps(self, query: str, starting_nodes: List[Tuple[str, str]]):
+        """Generator shared by `beam_search()` and the streaming endpoint.
+
+        Yields (depth, current_paths) after each expansion round, so callers
+        that want to observe progress (e.g. streaming to the frontend) can,
+        while `beam_search()` itself just consumes it to the end.
+        """
+        current_paths = []
+        for name, ntype in starting_nodes:
+            path = Path(nodes=[name], node_types=[ntype], relationships=[])
+            path.score = self.score_path(path, query)
+            current_paths.append(path)
+
+        for depth in range(self.max_depth):
+            logger.info(f"Depth {depth + 1}/{self.max_depth} | Paths: {len(current_paths)}")
+            expanded = self.expand_paths(current_paths, query)
+            expanded.sort(key=lambda p: p.score, reverse=True)
+            current_paths = expanded[: self.beam_width]
+            yield depth + 1, current_paths
+            if not current_paths:
+                break
+
     def beam_search(self, query: str, starting_nodes: List[Tuple[str, str]] = None) -> List[Path]:
         """
         Perform beam search to find reasoning paths.
-        
+
         Args:
             query: User's natural language query
             starting_nodes: Optional pre-computed starting nodes. If None, will find them.
-        
+
         Returns:
             List of Path objects sorted by score
         """
@@ -1525,31 +1497,19 @@ ORDER BY d.name
         # Use provided starting nodes or find them
         if starting_nodes is None:
             starting_nodes = self.find_starting_nodes(query)
-        
+
         if not starting_nodes:
             logger.warning("No starting nodes")
             return []
-        
-        starting = starting_nodes
 
-        # Initialize
-        current_paths = []
-        for name, ntype in starting:
-            path = Path(nodes=[name], node_types=[ntype], relationships=[])
-            path.score = self.score_path(path, query)
-            current_paths.append(path)
+        current_paths: List[Path] = []
+        for _, current_paths in self._beam_search_steps(query, starting_nodes):
+            pass
 
-        # Iterate
-        for depth in range(self.max_depth):
-            logger.info(f"Depth {depth + 1}/{self.max_depth} | Paths: {len(current_paths)}")
-            expanded = self.expand_paths(current_paths, query)
-            expanded.sort(key=lambda p: p.score, reverse=True)
-            current_paths = expanded[: self.beam_width]
-        # After beam search loop
         if not current_paths:
             logger.warning("No valid paths after beam search")
             return []
-        
+
         logger.info(f"Beam search complete. Best score: {current_paths[0].score:.1f}")
         return current_paths
 
@@ -1597,7 +1557,7 @@ Path {p_info['path_number']} (score: {p_info['score']:.1f}):
         prompt = get_path_based_answer_prompt(query, evidence)
 
         try:
-            response = _rate_limited_llm_invoke(prompt)
+            response = invoke_with_retry(prompt)
             answer = response.content.strip()
             logger.info("Generated answer using LLM")
             return answer
@@ -1612,8 +1572,10 @@ Path {p_info['path_number']} (score: {p_info['score']:.1f}):
 
         rel_map = {
             "TREATS": "treats",
+            "TREATED_BY": "is treated by",
             "CONTRAINDICATED_IN": "is contraindicated in",
             "REQUIRES_ADJUSTMENT": "requires dose adjustment in",
+            "ADJUSTMENT_REQUIRED_FOR": "requires an adjusted dose of",
             "INTERACTS_WITH": "interacts with",
             "CONTRAINDICATES": "contraindicates",
         }
@@ -1641,7 +1603,7 @@ Path {p_info['path_number']} (score: {p_info['score']:.1f}):
         prompt = get_cannot_answer_message_prompt(query, query_type, schema_info)
 
         try:
-            response = _rate_limited_llm_invoke(prompt)
+            response = invoke_with_retry(prompt)
             answer = response.content.strip()
             logger.info("Generated 'cannot answer' explanation using LLM")
             return answer
@@ -1688,11 +1650,74 @@ Path {p_info['path_number']} (score: {p_info['score']:.1f}):
         top = paths[0]
         # Use LLM-enhanced answer generation for better natural language responses
         answer = self._generate_answer_with_llm(top, query, all_paths=paths, starting_nodes=starting_nodes)
-        confidence = min(1.0, top.score / 100.0)
+        confidence = score_to_confidence(top.score)
 
         return {
             "answer": answer,
             "paths": [p.to_dict() for p in paths[:3]],
+            "query_type": query_type,
+            "confidence": confidence,
+        }
+
+    def answer_question_stream(self, query: str):
+        """Generator version of `answer_question()`.
+
+        Yields progress events as the beam search runs so a caller (e.g. the
+        streaming API endpoint) can push them to the frontend live, instead
+        of waiting for the whole search to finish. Ends with one "final"
+        event carrying the same payload `answer_question()` would return.
+        """
+        query_type = self.classify_query_type(query)
+        logger.info(f"Query classified as: {query_type} (routing to beam search)")
+
+        starting_nodes = self.find_starting_nodes(query)
+
+        if not starting_nodes:
+            explanation = self._generate_cannot_answer_message(query, query_type)
+            yield {
+                "type": "final",
+                "answer": explanation,
+                "paths": [],
+                "query_type": query_type,
+                "confidence": 0.0,
+            }
+            return
+
+        yield {
+            "type": "starting_nodes",
+            "nodes": [{"name": name, "type": ntype} for name, ntype in starting_nodes],
+        }
+
+        current_paths: List[Path] = []
+        for depth, current_paths in self._beam_search_steps(query, starting_nodes):
+            live_confidence = score_to_confidence(current_paths[0].score) if current_paths else 0.0
+            yield {
+                "type": "depth",
+                "depth": depth,
+                "max_depth": self.max_depth,
+                "paths": [p.to_dict() for p in current_paths],
+                "confidence": live_confidence,
+            }
+
+        if not current_paths:
+            explanation = self._generate_cannot_answer_message(query, query_type)
+            yield {
+                "type": "final",
+                "answer": explanation,
+                "paths": [],
+                "query_type": query_type,
+                "confidence": 0.0,
+            }
+            return
+
+        top = current_paths[0]
+        answer = self._generate_answer_with_llm(top, query, all_paths=current_paths, starting_nodes=starting_nodes)
+        confidence = score_to_confidence(top.score)
+
+        yield {
+            "type": "final",
+            "answer": answer,
+            "paths": [p.to_dict() for p in current_paths[:3]],
             "query_type": query_type,
             "confidence": confidence,
         }
