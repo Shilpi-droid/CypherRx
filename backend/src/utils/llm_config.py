@@ -3,7 +3,7 @@ Universal LLM Configuration
 Uses Groq (Llama 3.3 70B) for LLM inference
 
 Usage:
-    from backend.src.utils.llm_config import llm, invoke_with_retry
+    from src.utils.llm_config import llm, invoke_with_retry
     response = llm.invoke("your prompt")
 
     # Or with structured output

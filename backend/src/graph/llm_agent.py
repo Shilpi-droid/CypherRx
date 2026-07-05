@@ -10,8 +10,8 @@ from typing import List, Dict
 
 # Import the **single** LLM instance you created in the root of the repo
 
-from backend.src.utils.llm_config import llm,invoke_with_retry
-from backend.src.graph.relationship_direction import directional_phrase
+from src.utils.llm_config import llm,invoke_with_retry
+from src.graph.relationship_direction import directional_phrase
 
 logger = logging.getLogger(__name__)
 

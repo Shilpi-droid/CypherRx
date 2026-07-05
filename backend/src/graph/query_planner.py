@@ -9,9 +9,9 @@ import re
 import time
 from pydantic import BaseModel, Field, ValidationError
 
-from backend.src.utils.llm_config import llm, invoke_with_retry
-from backend.src.graph.schema_inspector import GraphSchemaInspector
-from backend.src.graph.prompts import (
+from src.utils.llm_config import llm, invoke_with_retry
+from src.graph.schema_inspector import GraphSchemaInspector
+from src.graph.prompts import (
     ENTITY_MAPPINGS,
     DEFAULT_SCHEMA,
     get_query_planner_system_prompt,

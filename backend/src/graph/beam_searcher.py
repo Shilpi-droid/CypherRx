@@ -18,11 +18,11 @@ from pydantic import BaseModel, Field
 
 # === Your LLM instance (shared across project) ===
 
-from backend.src.utils.llm_config import llm, invoke_with_retry
-from backend.src.graph.llm_agent import LLMAgent
-from backend.src.graph.relationship_direction import directional_relationship, directional_phrase
-from backend.src.graph.query_planner import QueryPlanner
-from backend.src.graph.prompts import (
+from src.utils.llm_config import llm, invoke_with_retry
+from src.graph.llm_agent import LLMAgent
+from src.graph.relationship_direction import directional_relationship, directional_phrase
+from src.graph.query_planner import QueryPlanner
+from src.graph.prompts import (
     get_query_classification_prompt,
     get_entity_normalization_prompt,
     get_entity_extraction_prompt,
